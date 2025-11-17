@@ -51,7 +51,17 @@ def process(PATH, DST):
     os.makedirs(DST, exist_ok=True)
     files = glob.glob(PATH)
     for file in files:
-        data = json.load(open(file))
+        # --- PERBAIKAN ADA DI BARIS INI ---
+        try:
+            data = json.load(open(file, encoding='utf-8'))
+        except UnicodeDecodeError:
+            print(f"Skipping file due to encoding error: {file}")
+            continue # Lewati file ini jika masih error juga
+        except Exception as e:
+            print(f"Skipping file due to other error ({e}): {file}")
+            continue # Lewati file jika ada error lain
+        # ------------------------------------
+            
         clean_data = {}
         article = data['content']
         summary = data['summary']
@@ -69,8 +79,10 @@ def process(PATH, DST):
 
             clean_data['clean_article'] = article_arr
             clean_data['clean_summary'] = summary_arr
-            with open(DST+str(clean_data['id'])+'.json', 'w') as json_file:
-                json.dump(clean_data, json_file)
+            
+            # --- SAYA JUGA TAMBAHKAN ENCODING DI SINI AGAR AMAN ---
+            with open(DST+str(clean_data['id'])+'.json', 'w', encoding='utf-8') as json_file:
+                json.dump(clean_data, json_file, ensure_ascii=False) # Tambah ensure_ascii=False
 
 
 process('data/raw/train/*', 'data/clean/train/')
