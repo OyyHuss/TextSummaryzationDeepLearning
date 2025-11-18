@@ -1,9 +1,15 @@
+#!/usr/bin/env python
+# coding: utf-8
+
 import sys
 import os
 import shutil
 import json, glob
 import torch
 from transformers import BertTokenizer
+
+# --- FIX 1: Install library dulu jika belum ada ---
+# pip install torch transformers
 
 SHARD_SIZE = 2000
 MIN_SRC_NSENTS = 3
@@ -14,8 +20,9 @@ MIN_TGT_NTOKENS = 5
 MAX_TGT_NTOKENS = 500
 USE_BERT_BASIC_TOKENIZER = False
 
-main_path = 'data/clean/'
-data_path = 'data/presumm/'
+# --- FIX 2: Pastikan path menggunakan separator yang benar di Windows ---
+main_path = os.path.join('data', 'clean')
+data_path = os.path.join('data', 'presumm')
 
 class BertData():
     def __init__(self):
@@ -80,17 +87,35 @@ class BertData():
         return src_subtoken_idxs, sent_labels, tgt_subtoken_idxs, segments_ids, cls_ids, src_txt, tgt_txt
 
 def read(fname):
-    data = json.loads(open(fname, 'r').readline())
-    return data['clean_article'], data['clean_summary'], data['extractive_summary']
+    # --- FIX 3: Tambah encoding utf-8 ---
+    try:
+        with open(fname, 'r', encoding='utf-8') as f:
+            data = json.loads(f.readline())
+        return data['clean_article'], data['clean_summary'], data['extractive_summary']
+    except Exception as e:
+        print(f"Error reading {fname}: {e}")
+        return None, None, None
 
 def format_to_bert(path):
     bert = BertData()
     files = glob.glob(path)
     p_ct = 0
     dataset = []
+    
+    print(f"Processing {len(files)} files in {path}...")
+
+    # --- FIX 4: Ambil nama set (train/dev/test) secara aman untuk Windows/Linux ---
+    # path contoh: "data/clean/train/*"
+    # os.path.split akan memisahkan head ('data/clean/train') dan tail ('*')
+    head, tail = os.path.split(path)
+    # Lalu kita ambil nama folder terakhir dari head ('train')
+    set_name = os.path.basename(head)
+    
     for fname in files:
         #process
         source, tgt, sent_labels = read(fname)
+        if source is None: continue
+
         b_data = bert.preprocess(source, tgt, sent_labels)
         if (b_data is None):
             continue
@@ -100,19 +125,38 @@ def format_to_bert(path):
                        'src_txt': src_txt, "tgt_txt": tgt_txt}
         dataset.append(b_data_dict)
         if len(dataset) >= SHARD_SIZE:
-            pt_file = data_path + "{:s}.{:d}.bert.pt".format(path.split('/')[-2], p_ct)
+            # --- FIX 5: Gunakan os.path.join dan set_name yang benar ---
+            pt_file = os.path.join(data_path, "{:s}.{:d}.bert.pt".format(set_name, p_ct))
+            print(f"Saving {pt_file}")
             torch.save(dataset, pt_file)
             dataset = []
             p_ct += 1
     if len(dataset) > 0:
-        pt_file = data_path + "{:s}.{:d}.bert.pt".format(path.split('/')[-2], p_ct)
+        # --- FIX 6: Sama seperti di atas ---
+        pt_file = os.path.join(data_path, "{:s}.{:d}.bert.pt".format(set_name, p_ct))
+        print(f"Saving {pt_file}")
         torch.save(dataset, pt_file)
         dataset = []
         p_ct += 1
 
+# --- Main Execution ---
+
+# Cek apakah library sudah terinstall
+try:
+    import torch
+    from transformers import BertTokenizer
+except ImportError:
+    print("ERROR: Library 'torch' atau 'transformers' belum terinstall.")
+    print("Silakan jalankan: pip install torch transformers")
+    sys.exit(1)
+
 if os.path.exists(data_path):
     shutil.rmtree(data_path)
-os.mkdir(data_path)
-format_to_bert(main_path + 'train/*')
-format_to_bert(main_path + 'dev/*')
-format_to_bert(main_path + 'test/*')
+os.makedirs(data_path)
+
+# Gunakan os.path.join untuk path yang aman
+format_to_bert(os.path.join(main_path, 'train', '*'))
+format_to_bert(os.path.join(main_path, 'dev', '*'))
+format_to_bert(os.path.join(main_path, 'test', '*'))
+
+print("\nSELESAI! File .bert.pt Anda sudah siap di folder data/presumm/")
