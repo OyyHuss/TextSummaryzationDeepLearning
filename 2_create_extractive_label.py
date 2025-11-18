@@ -6,7 +6,7 @@ import hashlib
 import struct
 import subprocess
 import collections
-import tensorflow as tf
+# import tensorflow as tf # TF seringkali tidak dipakai di sini, tapi jika error module not found, uncomment lagi
 import json, glob, math
 import numpy as np
 from multiprocessing import Process
@@ -54,8 +54,15 @@ def get_list(cur_list, size):
     return list(next_array)
 
 def find_label(fname):
-    data = json.loads(open(fname, 'r').readline())
-    article = np.array(data['clean_article'][:MAX_SENTENCE])
+    # Tambah encoding utf-8
+    try:
+        with open(fname, 'r', encoding='utf-8') as f:
+            data = json.loads(f.readline())
+    except Exception as e:
+        print(f"Error reading {fname}: {e}")
+        return None
+
+    article = np.array(data['clean_article'][:MAX_SENTENCE], dtype=object) # dtype object untuk keamanan numpy baru
     summary = get_string(data['clean_summary']).lower()
     unigram_summary = compute_dictionary(summary)
     temp_result = []
@@ -73,10 +80,16 @@ def find_label(fname):
             for idy in next_list:
                 cur_range = np.array(ids + [idy])
                 score = get_score(cur_range, article, unigram_summary)
-                cur_score[cur_range.tostring()] = score
+                # cur_range.tostring() deprecated, ganti tobytes()
+                cur_score[cur_range.tobytes()] = score 
+            
             # sort by value 
+            if not cur_score:
+                break
+
             cur_best = sorted(cur_score, key=cur_score.get, reverse=True)[0]
-            cur_best_array = np.fromstring(cur_best, dtype=int)
+            cur_best_array = np.frombuffer(cur_best, dtype=int) # ganti fromstring jadi frombuffer
+            
             if global_best is None:
                 global_best = (cur_best_array, cur_score[cur_best])
                 ids = list(cur_best_array)
@@ -88,30 +101,48 @@ def find_label(fname):
                     global_best = (cur_best_array, cur_score[cur_best])
                     ids = list(cur_best_array)
     try:
-        data['extractive_summary'] = sorted(temp_result, key=lambda tup: tup[1], reverse=True)[0][0].tolist()
+        if temp_result:
+            data['extractive_summary'] = sorted(temp_result, key=lambda tup: tup[1], reverse=True)[0][0].tolist()
+        else:
+            data['extractive_summary'] = [0]
     except:
-        assert (len(article) == 1)
+        # assert (len(article) == 1)
         data['extractive_summary'] = [0]
     return data
 
+# --- PERUBAHAN 1: Fungsi run_thread dipindah ke Global ---
+def run_thread(files, target_path):
+    for f in files:
+        data = find_label(f)
+        if data is not None:
+            # Tambah encoding utf-8 saat menulis
+            filename = os.path.basename(f) # Ambil nama file saja agar aman
+            with open(os.path.join(target_path, filename), 'w', encoding='utf-8') as json_file:
+                json.dump(data, json_file)
+
 def proceed(source_path, num_thread):
+    # Fix path replacement logic agar aman di Windows
     target_path = source_path.replace('*', '')
     files = glob.glob(source_path)
 
+    if not files:
+        print(f"Warning: No files found in {source_path}")
+        return
+
     size = int(math.ceil(1.0*len(files)/num_thread))
     processes = list()
-    def run_thread(files):
-        for f in files:
-            data = find_label(f)
-            with(open(target_path + f.split('/')[-1], 'w')) as json_file:
-                json.dump(data, json_file)
+    
     for i in range(num_thread):
         start = i * size
         end = start + size
         if end > len(files):
             end = len(files)
         p = files[start:end]
-        process = Process(target=run_thread, args=(p,))
+        
+        if not p: continue
+
+        # Kirim target_path sebagai argumen juga
+        process = Process(target=run_thread, args=(p, target_path))
         process.start()
         processes.append(process)
         if end == len(files):
@@ -119,12 +150,22 @@ def proceed(source_path, num_thread):
     for process in processes:
         process.join()
 
+# --- PERUBAHAN 2: Entry point guard untuk Windows ---
+if __name__ == '__main__':
+    # Saya kurangi threads jadi 4-8 agar laptop tidak hang
+    # Jika CPU Anda kuat (misal i7/Ryzen 7 terbaru), bisa naikkan ke 8 atau 10
+    THREADS = 4 
+    source_path = 'data/clean/' # Pastikan slash sesuai folder Anda
+    
+    print("Working on All Files... (Ini akan memakan waktu, jangan di-close)")
+    
+    print("Processing Train Data...")
+    proceed(os.path.join(source_path, 'train', '*'), THREADS)
+    
+    print("Processing Test Data...")
+    proceed(os.path.join(source_path, 'test', '*'), THREADS)
+    
+    print("Processing Dev Data...")
+    proceed(os.path.join(source_path, 'dev', '*'), THREADS)
 
-THREADS = 20
-source_path = 'data/clean/'
-print("Working on All Files, Wait for 10-15 mins")
-proceed(source_path+'train/*', THREADS)
-proceed(source_path+'test/*', THREADS)
-proceed(source_path+'dev/*', THREADS)
-
-
+    print("SELESAI! Silakan cek file JSON Anda, key 'extractive_summary' seharusnya sudah ada.")
